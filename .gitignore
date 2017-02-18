@@ -1,0 +1,12 @@
+*.swp
+\#*\#
+*.o
+*.vo
+*.glob
+*.aux
+*.crashcoqide
+ressources/
+generate/
+*.hi
+*.vio 
+

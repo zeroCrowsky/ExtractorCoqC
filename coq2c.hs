@@ -4,7 +4,7 @@
 -- License     :  CeCILL
 --
 -- Maintainer  :  veis.oudjail@gmail.com
---                samuel.hym@univ-lille1.fr
+--                samuel.hym+bugs@rustyne.lautre.net
 
 -- Stability   :  experimental
 -- Portability :  multi plateform
@@ -44,30 +44,31 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main where
 
------------ ASTCoq Import -----------------
+import Control.Applicative
+import Control.Monad       (zipWithM, join)
 import Data.Aeson
+import Data.Bool           (bool)
+import Data.Char           (toUpper)
+import Data.List           (intercalate, union, find)
+import Data.List.Split     (splitOn)
+import Data.Maybe          (fromMaybe)
+import Data.Monoid         ((<>))
+import Options.Applicative (strArgument,strOption,short,long,metavar,optional,help)
+import System.Environment  (getProgName)
+import Text.Regex.Posix    ((=~))
+
 import qualified Data.ByteString.Lazy.Char8 as BS
+import qualified Options.Applicative        as OA
 
------------ ASTC Import ------------------
-import Data.Maybe (fromMaybe)
-import Data.Bool (bool)
-import Control.Monad (zipWithM)
-import Control.Monad.Extra (concatMapM, join)
-import Data.List (intercalate, union, find)
-import Data.Char (toUpper)
-import Data.List.Split (splitOn)
-import Text.Regex.Posix ((=~))
-
---------- Main Import --------------------
-import qualified Options.Applicative as OA
-import System.Environment (getProgName)
+concatMapM :: (Functor m, Monad m) => (a -> m [b]) -> [a] -> m [b]
+concatMapM f = fmap concat . mapM f
 
 ----------- Module ASTCoq -----------------
 
 -- Ce type peut-être interprété comme une énumération.
 -- Chacun de ses éléments représente une entité de l'arbre syntaxique Coq.
-data WhatT = DeclT DeclT | FixgrpT FixgrpT | TypeT TypeT
-           | ExprT ExprT | CaseT | PatT PatT
+data WhatT = DeclT DeclT | FixgrpT FixgrpT | TypeT TypeT
+           | ExprT ExprT | CaseT | PatT PatT
            | ModuleT
            deriving (Show)
 
@@ -117,7 +118,7 @@ data Decl = Term     { nameTerm  :: String
                      , valueTerm :: Expr
                      }
 
-          | Fixgroup { fixlistFixgroup :: [Fixgroup]
+          | Fixgroup { fixlistFixgroup :: [Fixgroup]
                      }
           deriving (Show)
 
@@ -332,7 +333,7 @@ instance FromJSON Module where
 
 
 data ASTCoq = ModuleAST Module
-            | TypeAST Type
+            | TypeAST Type
             | ExprAST Expr
             | CaseAST Case
             | DeclAST Decl
@@ -414,7 +415,7 @@ data PrototypeC = PrototypeC { nameProto       :: String
 
 data InstructionC = CSC            { cSC :: ControlStructC
                                    }
-                  | ExprC          { exprC :: ExprC
+                  | ExprC          { exprC :: ExprC
                                    }
 
                   | DeclVarC       { declVarC :: DeclVarC
@@ -475,7 +476,7 @@ data DeclC = VarCDecl     { varCDecl :: DeclVarC
 
 data DeclVarC = VarEmptyDecl { lvalueEDecl :: VarC
                              }
-              | VarDecl      { lvalueDecl :: VarC
+              | VarDecl      { lvalueDecl :: VarC
                              , rvalueDecl :: ExprC
                              }
 
@@ -501,11 +502,11 @@ data FileC = FileC { includeFC :: [IncludeC]
 type FileH = FileC
 
 data IncludeC = GloIncC String
-              | LocIncC String
+              | LocIncC String
               deriving (Show, Eq, Read)
 
 data TypeC = TypeC String
-           | TypeCFun [TypeC]
+           | TypeCFun [TypeC]
            deriving (Show, Eq)
 
 
@@ -608,7 +609,7 @@ data EnvUserItem = NewTypeEUI { nameCoqNNEUI :: NameCoq
                  | NewVarEUI { nameCoqNVEUI :: NameCoq
                              , newDeclVarC  :: DeclVarC
                              }
-                 | OpBinEUI   { nameCoqOBEUI :: NameCoq
+                 | OpBinEUI   { nameCoqOBEUI :: NameCoq
                               , nameCOBEUI   :: SymbolBinOp
                               , pTypeOBEUI   :: EnvG -> Parser (Either Type Expr) TypeC
                               }
@@ -617,11 +618,13 @@ data EnvUserItem = NewTypeEUI { nameCoqNNEUI :: NameCoq
                                   , includeListEUI :: [(NameCoq, [IncludeC])]
                                   }
 
-data EnvArgs = EnvArgs { importOpt :: [String]
-                       , incOpt    :: [String]
-                       , headerOpt :: Maybe String
-                       , inputOpt  :: String
-                       , outputOpt :: Maybe String
+data EnvArgs = EnvArgs { importOpt  :: [String]
+                       , gloIncOpt  :: [String]
+                       , locIncOpt  :: [String]
+                       , headerOpt  :: Maybe String
+                       , outputOpt  :: Maybe String
+                       , outputHOpt :: Maybe String
+                       , inputOpt   :: String
                        }
 
 data EnvTypeItem = ETI { idET :: String, funET :: EnvG -> Parser (Either Type Expr) TypeC }
@@ -690,7 +693,7 @@ runParserEnvFApply :: EnvG -> Parser Expr ExprC
 runParserEnvFApply env@(_,_,_,EFA efa,_) c = foldr (\f fs -> f env c ||| fs) (fail "runParserEnvFApply undefined") efa
 
 runParserEnvCondC :: EnvG -> EnvCondC -> ExprC -> Parser Pat ([DeclVarC], Maybe ExprC)
-runParserEnvCondC env (EC envc) expr pat = foldr (\f fs -> f env expr pat ||| fs) (fail "runParserEnvCondC undefined") envc
+runParserEnvCondC env (EC envc) expr pat = foldr (\f fs -> f env expr pat ||| fs) (fail "runParserEnvCondC undefined") envc
 
 retConstPType :: String -> TypeC -> EnvTypeItem
 retConstPType nameCoq typeC = ETI nameCoq (\_ _ -> return typeC)
@@ -795,7 +798,7 @@ envUser = [ NewTypeEUI "bool"    pBoolC      [("Coq_true", pTrueValC), ("Coq_fal
           , NewFunEUI "countZero"         "indexZero"                    pUint32C      0
           , NewFunEUI "countSucc"         "inc"                          pUint32C      1 -}
           ]
-  where pBoolC _     = const $ return (TypeC "int")
+  where pBoolC _     = const $ return (TypeC "uint32_t")
         pUintPtrC _  = const $ return (TypeC "uintptr_t")
         pUint32C  _  = const $ return (TypeC "uint32_t")
         pVoidC _     = const $ return (TypeC "void")
@@ -873,43 +876,38 @@ envVarC :: EnvUser -> EnvVarC
 envVarC _ = []
 
 envArgs :: OA.Parser EnvArgs
-envArgs = EnvArgs
-          <$> (splt <$> strOption
-            ( long "import"
-           <> metavar "IMPORT's"
-           <> help "Import module, add env !"
-            ))
-           <*>
-           (splt <$> strOption
-             ( short 'I'
-            <> metavar "INCLUDE's"
-            <> help "Add include C !"
-             ))
-           <*>
-           optional (strOption
-           ( long "header"
-          <> metavar "HEADER"
-           ))
-           <*>
-           strOption
-             ( short 'c'
-            <> metavar "SRC"
-            <> help "Add source COQ !"
-             )
-           <*>
-           optional (strOption
-           ( short 'o'
-          <> metavar "OUTPUT"
-          <> help "Rename output C file !"
-           ))
-  where splt = (\x -> if x == [""] then [] else x) . splitOn " "
-        metavar   = OA.metavar
-        optional  = OA.optional
-        long      = OA.long
-        strOption = OA.strOption
-        short     = OA.short
-        help      = OA.help
-        (<>)      = (OA.<>)
+envArgs = EnvArgs <$> imports <*> gloincs <*> locincs <*> header <*> output <*> outputH <*> input
+    where input   = strArgument $  metavar "INPUT.json"
+                                <> help "Coq module (extracted as JSON) to compile into C code"
+          imports = many $ strOption $
+                         short   'm'
+                      <> long    "module"
+                      <> metavar "MODULE.json"
+                      <> help    "load function names and types from the given Coq MODULE (extracted as JSON)"
+          gloincs = many $ strOption $
+                         short   'i'
+                      <> long    "include"
+                      <> metavar "INCL.h"
+                      <> help    "add #include directive for this (global) header file"
+          locincs = many $ strOption $
+                         short   'I'
+                      <> long    "locinclude"
+                      <> metavar "INCL.h"
+                      <> help    "add #include directive for this local header file"
+          header  = optional $ strOption $
+                         long    "header"
+                      <> metavar "FILE"
+                      <> help    "add the content of FILE to the header of the generated C file"
+          output  = optional $ strOption $
+                         short   'o'
+                      <> long    "output"
+                      <> metavar "FILE.c"
+                      <> help    "output extracted C code into FILE.c (defaults to INPUT.c)"
+          outputH = optional $ strOption $
+                         short   'O'
+                      <> long    "output-h"
+                      <> metavar "FILE.h"
+                      <> help    "output extracted C code headers into FILE.h"
 
 envG :: EnvUser -> EnvG
 envG eu = (envVarC eu, envType eu, envValC eu, envFunApply eu, envChangeName eu)
@@ -935,7 +933,7 @@ parseError PE_NOT_IF_THEN_ELSE = "The pattern matching is not possible to parse 
 parseOpBinOPC :: EnvBinOp -> EnvG -> Parser Expr ExprC
 parseOpBinOPC envb env (Apply (Global op) args) = if length args /= 2
                                                   then fail "parseOpBinOPC : Arguments > 2"
-                                                  else do yop <- lookupEnvBinOp op envb -- ^^
+                                                  else do yop <- lookupEnvBinOp op envb
                                                           le  <- parseExprC env (head args)
                                                           re  <- parseExprC env (args !! 1)
                                                           return $ BinOp le yop re
@@ -951,7 +949,7 @@ parseTypeC env tp = do r <- pType tp
   where pType :: Parser Type [TypeC]
         pType t = case t of
           Varidx{}          -> fail "Exception, error variable type"
-          Glob n _          -> (:[]) <$> (runParserEnvT n env (Left t) ||| parseMacroTypeC t)
+          Glob n _          -> (:[]) <$> (runParserEnvT n env (Left t) ||| parseMacroTypeC t)
           Arrow l@Arrow{} r -> (:) <$> (TypeCFun <$> pType l) <*> pType r
           Arrow l r         -> (++) <$> pType l <*> pType r
 
@@ -961,8 +959,8 @@ parseNameC nameCoq = if nameC == nameCoq'
                        then return nameC
                        else fail $ "parseNameC fail, the identifier is not correct : " ++ nameCoq
   where nameCoq' = clearPref nameCoq
-        pattern  = "[a-zA-Z_](_?[a-zA-Z0-9]+)*" :: String
-        nameC    = (nameCoq' =~ pattern) :: String
+        pattern' = "[a-zA-Z_](_?[a-zA-Z0-9]+)*" :: String
+        nameC    = (nameCoq' =~ pattern') :: String
 
 
 parseExprOfTypeC :: EnvG -> Parser Expr TypeC
@@ -1042,7 +1040,7 @@ parsePrototypeC env term  =
                                    then mergeParam t prm
                                    else fail $ "Exception, detection of partiel application (definition) : function " ++ n'
         args _ _ _               = fail "parsePrototypeC - args, undefined"
-        mergeParam type's prm' = zipWithM (\a b -> VarEmptyDecl . flip (,) a <$> parseNameC b) type's prm'
+        mergeParam = zipWithM (\a b -> VarEmptyDecl . flip (,) a <$> parseNameC b)
 
 parseFunctionC :: EnvG -> Parser Decl FunctionC
 parseFunctionC env t@Term{} = do prototype    <- snd <$> parsePrototypeC env (Left t)
@@ -1064,8 +1062,7 @@ parseInstructionC env expr = case expr of
   Rel{}          -> multicase
   Global{}       -> multicase
   ConstructorE{} -> multicase
-  Apply{}        -> parseMonadBlockC env expr ||| 
-                     multicase
+  Apply{}        -> parseMonadBlockC env expr ||| multicase
   Case{}         -> (:[]) . CSC . Cond <$> parseConditionnalC envCondC env expr
   (Let _ _ body) -> do (newEnv, varLet) <- parseDeclVarC env (Right expr)
                        instructions     <- parseInstructionC newEnv body
@@ -1117,7 +1114,7 @@ pPatOExprC _ _ _                                   = fail "pPatOExprC undefined"
 
 pPatSExprC :: EnvG -> ExprC -> Parser Pat ([DeclVarC], Maybe ExprC)
 pPatSExprC _ match (ConstructorP "Datatypes.S" [p]) = do p' <- parseNameC p
-                                                         return ([VarDecl (p', TypeC "unsigned") (BinOp match "-" (ValC ("1", TypeC "int")))], Nothing)
+                                                         return ([VarDecl (p', TypeC "unsigned") (BinOp match "-" (ValC ("1", TypeC "uint32_t")))], Nothing)
 pPatSExprC _ _ _                                    = fail "pPatSExprC undefined"
 
 pPatTrueExprC :: EnvG -> ExprC -> Parser Pat ([DeclVarC], Maybe ExprC)
@@ -1125,7 +1122,7 @@ pPatTrueExprC _ match (ConstructorP "Datatypes.Coq_true" []) = return ([], retur
 pPatTrueExprC _ _ _                                          = fail "pPatTrueExprC undefined"
 
 pPatFalseExprC :: EnvG -> ExprC ->  Parser Pat ([DeclVarC], Maybe ExprC)
-pPatFalseExprC _ match (ConstructorP "Datatypes.Coq_false" []) = return ([], return $ BinOp match "==" (ValC ("0", TypeC "int")))
+pPatFalseExprC _ match (ConstructorP "Datatypes.Coq_false" []) = return ([], return $ BinOp match "==" (ValC ("0", TypeC "uint32_t")))
 pPatFalseExprC _ _ _                                           = fail "pPatFalseExprC undefined"
 ----------------------------------------------------------
 
@@ -1156,7 +1153,7 @@ parseValC env c@ConstructorE{} = runParserEnvV env c
 parseValC _ _                  = fail "parseValC undefined"
 
 parseApplyFunC :: EnvG -> Parser Expr ExprC
-parseApplyFunC env apply = runParserEnvFApply env apply ||| pApplyFunC
+parseApplyFunC env apply = runParserEnvFApply env apply ||| pApplyFunC
   where pApplyFunC = case apply of
           (Apply fun args) -> do f      <- transformFun fun
                                  a      <- transformArgs args
@@ -1169,34 +1166,23 @@ parseApplyFunC env apply = runParserEnvFApply env apply ||| pApplyFunC
         transformFun (Global f) = return f
         transformFun (Rel f)    = return f
         transformFun _          = fail "It's not function"
-        transformFun' f = lookupEnvN f env ||| parseNameC f
+        transformFun' f = lookupEnvN f env ||| parseNameC f
         transformArgs = mapM (parseExprC env)
         checkApplyPart nfun a = do t <- runParserEnvT nfun env (Right apply)
                                    return $ length a == length (elmTypeC t) - 1
         construct f a = do f' <- transformFun' f
                            return $ ApplyFunC f' a
 
-parseIncludeC :: Parser ModuleUsed IncludeC
-parseIncludeC mu = if glob /= ""
-                    then GloIncC <$> ((pN . filtr) glob)
-                    else LocIncC <$> (pN mu)
-  where pattern = "<.*>" :: String
-        glob = mu =~ pattern :: String
-        filtr = init . tail
-        pN = parseNameC . head . (splitOn "." :: String -> [String])
-
 parseFileC :: EnvArgs -> EnvG -> Parser Module FileC
-parseFileC eargs eg m = do inc   <- mapM parseIncludeC $ nm : einc
-                           ldecl <- parseAllDeclC eg (declarationsMod m)
-                           return $ FileC inc ldecl
-  where nm = nameMod m
-        einc = incOpt eargs
+parseFileC eargs eg m = do ldecl <- parseAllDeclC eg (declarationsMod m)
+                           return $ FileC includes ldecl
+  where includes = map GloIncC (gloIncOpt eargs)
+                ++ map LocIncC (locIncOpt eargs)
 
 parseFileH :: EnvArgs -> EnvG -> Parser Module (EnvG, FileH)
-parseFileH eargs eg m = do inc          <- mapM parseIncludeC $ einc
-                           (env, ldecl) <- parseAllDeclH eg (declarationsMod m)
-                           return (env, FileC inc ldecl)
-  where einc = incOpt eargs
+parseFileH eargs eg m = do (env, ldecl) <- parseAllDeclH eg (declarationsMod m)
+                           return (env, FileC includes ldecl)
+  where includes = map GloIncC (gloIncOpt eargs) ++ map LocIncC (locIncOpt eargs)
 
 parseModuleC :: EnvArgs -> EnvG -> Parser Module (EnvG, ModuleC)
 parseModuleC eargs env m = do (envH, fileH) <- parseFileH eargs env m
@@ -1213,7 +1199,7 @@ parseMacroInc name = ( "#ifndef " ++ define ++ "\n"
 parseImportC :: EnvG -> Parser Module (EnvG, DeclC)
 parseImportC env m = do (nenv, declH's) <- parseAllDeclH env (declarationsMod m)
                         let comDeclH's = concatMap ((++"\n") . showDeclC) declH's
-                            header = "************* Fichier " ++ nameMod m ++  " *************\n"
+                            header = "************* Expected symbols from " ++ nameMod m ++  " *************\n"
                             footer = replicate (length header) '*'
                         return (nenv, CommDecl $ header ++ comDeclH's ++ footer)
 
@@ -1236,8 +1222,8 @@ showIndent indent = if indent < 0 then "" else replicate indent '\t'
 
 showIncludeC :: IncludeC -> String
 showIncludeC inc = case inc of
-  (GloIncC name) -> "#include <" ++ name ++ ".h>" ++ "\n"
-  (LocIncC name) -> "#include \"" ++ name ++ ".h\"" ++ "\n"
+  (GloIncC name) -> "#include <" ++ name ++ ">" ++ "\n"
+  (LocIncC name) -> "#include \"" ++ name ++ "\"" ++ "\n"
 
 showVarC :: Indent -> VarC -> String
 showVarC ind (n, _) = showIndent ind ++  n
@@ -1364,18 +1350,18 @@ main = do namePrg   <- getProgName
           eargs     <- OA.execParser (opts namePrg)
           fileImp's <- mapM readFile $ importOpt eargs
           fileCoq   <- readFile $ inputOpt eargs
-          putStrLn "Begin of parsing ..."
           let (nm, (contentFileH, contentFileC)) = eith . myEither $ extractor eargs fileImp's fileCoq
-              output = fromMaybe nm (outputOpt eargs)
-          putStrLn "End of parsing ..."
-          putStrLn "Create files C ..."
-          writeFile (output ++ ".h") contentFileH
-          writeFile (output ++ ".c") contentFileC
-          putStrLn "End."
+              output = fromMaybe (nm ++ ".c") (outputOpt eargs)
+          writeFile output contentFileC
+          case outputHOpt eargs of
+            Just fileH -> writeFile fileH contentFileH
+            Nothing    -> return ()
 
   where eith = either error id
         opts nm = OA.info (OA.helper <*> envArgs)
                   ( OA.fullDesc
-                  OA.<> OA.progDesc "Compile the source Coq -> subset C"
-                  OA.<> OA.header (nm ++ " --import \"Mal.json\" -I \"<stdint.h> mal.h\" --header Cecil")
+                    <> OA.progDesc (  "Compile Coq source code written in a specific monadic style "
+                                   ++ "(and extracted to its JSON representation by the standard "
+                                   ++ "Coq extracting facility) into the corresponding C code" )
+                    <> OA.header (nm ++ " - a simple compiler from Coq monadic code into C")
                   )
